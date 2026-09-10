@@ -85,7 +85,7 @@ jobs:
           curl --fail --location --retry 3 \
             "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/${YT_DLP_ASSET}" \
             --output "src/assets/bin/${YT_DLP_FILENAME}"
-          echo "${YT_DLP_SHA256}  src/assets/bin/${YT_DLP_FILENAME}" | sha256sum --check
+          python -c 'import hashlib, os, pathlib, sys; path = pathlib.Path("src/assets/bin") / os.environ["YT_DLP_FILENAME"]; actual = hashlib.sha256(path.read_bytes()).hexdigest(); expected = os.environ["YT_DLP_SHA256"].lower(); print(f"SHA-256: {actual}"); sys.exit(0 if actual == expected else "yt-dlp SHA-256 mismatch")'
           chmod +x "src/assets/bin/${YT_DLP_FILENAME}"
 
       - name: Build ${{ matrix.asset }}
