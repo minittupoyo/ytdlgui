@@ -1,12 +1,10 @@
-name: Release desktop apps
+name: Build desktop apps
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   FLET_CLI_NO_RICH_OUTPUT: 1
@@ -39,16 +37,6 @@ jobs:
           VERSION="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Verify release tag
-        env:
-          EXPECTED_TAG: v${{ steps.version.outputs.value }}
-        shell: bash
-        run: |
-          if [ "$GITHUB_REF_NAME" != "$EXPECTED_TAG" ]; then
-            echo "Release tag must be $EXPECTED_TAG to match pyproject.toml; got $GITHUB_REF_NAME."
-            exit 1
-          fi
-
       - name: Build ${{ matrix.asset }}
         id: build
         uses: flet-dev/flet-build-action@v1
@@ -60,45 +48,16 @@ jobs:
           build-version: ${{ steps.version.outputs.value }}
           extra-args: ${{ matrix.extra_args }}
 
-      - name: Name release archive
+      - name: Name build archive
         shell: bash
         run: |
           mkdir -p release
           cp "${{ steps.build.outputs.archive-path }}" "release/ytdlgui-${{ steps.version.outputs.value }}-${{ matrix.asset }}.zip"
 
-      - name: Upload release archive
+      - name: Upload build archive
         uses: actions/upload-artifact@v7
         with:
-          name: release-${{ matrix.asset }}
+          name: ytdlgui-${{ matrix.asset }}
           path: release/*.zip
           archive: false
           if-no-files-found: error
-
-  release:
-    name: Publish GitHub Release
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v6
-
-      - name: Read project version
-        id: version
-        run: |
-          VERSION="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Download release archives
-        uses: actions/download-artifact@v8
-        with:
-          pattern: release-*
-          path: release
-          merge-multiple: true
-
-      - name: Create release and upload archives
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          gh release create "$TAG" release/*.zip --title "$TAG" --generate-notes
