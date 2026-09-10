@@ -122,4 +122,4 @@ jobs:
             exit 1
           fi
 
-          gh release upload "$TAG" "${files[@]}" --clobber
+          gh release upload "$TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
