@@ -2,6 +2,7 @@ import flet as ft
 import os
 import subprocess
 import asyncio
+import platform
 
 
 def fix_path_env() -> None:
@@ -48,11 +49,15 @@ def main(page: ft.Page):
         progress_bar.value = None
         progress_bar.update()
         try:
+            env = os.environ.copy()
+            env.pop("PYTHONHOME", None)
+            env.pop("PYTHONPATH", None)
             process = await asyncio.create_subprocess_exec(
                 command,
                 *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=env
             )
             assert process.stdout is not None
 
@@ -117,5 +122,6 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    fix_path_env()
+    if platform.system() != "Windows":
+        fix_path_env()
     ft.run(main)
