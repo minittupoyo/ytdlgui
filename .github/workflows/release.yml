@@ -43,7 +43,8 @@ jobs:
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --generate-notes
+            --generate-notes \
+            --draft
 
   build:
     name: Build ${{ matrix.asset }}
@@ -123,3 +124,10 @@ jobs:
           fi
 
           gh release upload "$TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+        shell: bash
+        run: gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"
