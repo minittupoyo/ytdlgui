@@ -60,7 +60,6 @@ jobs:
         with:
           name: ytdlgui-${{ matrix.asset }}
           path: release/*.zip
-          archive: false
           if-no-files-found: error
 
   publish-assets:
