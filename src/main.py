@@ -1,8 +1,43 @@
 import flet as ft
+import json
 import os
 import subprocess
 import asyncio
 import platform
+import shutil
+from pathlib import Path
+
+
+def settings_path() -> Path:
+    app_data = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+    return app_data / "ytdlgui" / "settings.json"
+
+
+def load_settings() -> dict[str, object]:
+    try:
+        settings = json.loads(settings_path().read_text(encoding="utf-8"))
+        return settings if isinstance(settings, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_settings(settings: dict[str, object]) -> None:
+    try:
+        path = settings_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def check_dependencies() -> list[str]:
+    missing: list[str] = []
+
+    for command in ("deno", "ffmpeg"):
+        if shutil.which(command) is None:
+            missing.append(command)
+
+    return missing
 
 
 def fix_path_env() -> None:
@@ -22,28 +57,226 @@ def fix_path_env() -> None:
 
 
 def main(page: ft.Page):
+
+    def init():
+        settings = load_settings()
+        default_output_path = os.path.join(os.path.expanduser("~"), "Downloads")
+        output_path_field.value = settings.get("output_path", default_output_path)
+        selected_format = settings.get("format", "mp4")
+        if selected_format not in ("mp4", "mkv", "mp3", "aac", "flac"):
+            selected_format = "mp4"
+        format_dropdown.value = selected_format
+        quality_dropdown.options = quality_options(selected_format)
+        quality_values = {option.key for option in quality_dropdown.options}
+        quality_dropdown.value = settings.get("quality", "auto")
+        if quality_dropdown.value not in quality_values:
+            quality_dropdown.value = "auto"
+        filename_template.value = settings.get(
+            "filename_template", "%(title)s.%(ext)s"
+        )
+        playlist_mode.value = bool(settings.get("playlist_mode", False))
+        embed_thumbnail.value = bool(settings.get("embed_thumbnail", False))
+        crop_thumbnail.value = bool(settings.get("crop_thumbnail", False))
+        album_mode.visible = selected_format in ("mp3", "aac", "flac")
+        album_mode.value = album_mode.visible and bool(settings.get("album_mode", False))
+        if album_mode.value:
+            playlist_mode.value = True
+            playlist_mode.disabled = True
+            update_filename_template()
+        page.update()
+        missing = check_dependencies()
+        if missing:
+            page.show_dialog(
+                ft.AlertDialog(
+                    title=ft.Text(
+                        "必要なソフトが見つかりませんでした", weight=ft.FontWeight.BOLD
+                    ),
+                    content=ft.Text(
+                        f"以下のコマンドが利用できません:\n\n" + "\n".join(missing)
+                    ),
+                    actions=[
+                        ft.TextButton("閉じる", on_click=lambda e: page.pop_dialog())
+                    ],
+                )
+            )
+
     async def handle_output_pick(e: ft.Event[ft.TextButton]):
-        output_path_field.value = await ft.FilePicker().get_directory_path()
+        path = await ft.FilePicker().get_directory_path(
+            dialog_title="保存先を選択", initial_directory=os.path.expanduser("~")
+        )
+        if path is not None:
+            output_path_field.value = path
+            output_path_field.update()
+            persist_settings()
+
+    def persist_settings() -> None:
+        save_settings(
+            {
+                "output_path": output_path_field.value,
+                "format": format_dropdown.value,
+                "quality": quality_dropdown.value,
+                "filename_template": filename_template.value,
+                "playlist_mode": bool(playlist_mode.value),
+                "album_mode": bool(album_mode.value),
+                "embed_thumbnail": bool(embed_thumbnail.value),
+                "crop_thumbnail": bool(crop_thumbnail.value),
+            }
+        )
+
+    def handle_settings_change(e: ft.Event[ft.Control]) -> None:
+        persist_settings()
+
+    def build_args() -> list[str]:
+        selected_format = format_dropdown.value or "mp4"
+        selected_quality = quality_dropdown.value or "auto"
+        args = [
+            "--newline",
+            "--color",
+            "no_color",
+            "-o",
+            filename_template.value or "%(title)s.%(ext)s",
+            "-P",
+            os.path.abspath(output_path_field.value),
+            "--progress-template",
+            "download:[DOWNLOADING]\t%(progress._percent)s\t%(info.title)s",
+        ]
+
+        if selected_format in ("mp4", "mkv"):
+            height = {"4k": "2160", "2k": "1440", "1080p": "1080", "720p": "720"}
+            selector = "bestvideo+bestaudio/best"
+            if selected_quality != "auto":
+                selector = (
+                    f"bestvideo[height<={height[selected_quality]}]"
+                    f"+bestaudio/best[height<={height[selected_quality]}]"
+                )
+            args.extend(["-f", selector, "--merge-output-format", selected_format])
+        else:
+            args.extend(["-x", "--audio-format", selected_format])
+            args.extend(
+                [
+                    "--audio-quality",
+                    "0" if selected_quality == "auto" else selected_quality,
+                ]
+            )
+
+        args.append(
+            "--yes-playlist"
+            if playlist_mode.value or album_mode.value
+            else "--no-playlist"
+        )
+        if embed_thumbnail.value or crop_thumbnail.value or album_mode.value:
+            args.append("--embed-thumbnail")
+        if crop_thumbnail.value or album_mode.value:
+            args.extend(
+                [
+                    "--convert-thumbnails",
+                    "jpg",
+                    "--postprocessor-args",
+                    "ThumbnailsConvertor+ffmpeg_o:-vf crop=\"'min(iw,ih)':'min(iw,ih)':'(iw-ow)/2':'(ih-oh)/2'\"",
+                ]
+            )
+        if album_mode.value:
+            args.extend(
+                [
+                    "--embed-metadata",
+                    "--parse-metadata",
+                    "%(album|playlist_title)s:%(meta_album)s",
+                    "--parse-metadata",
+                    "%(playlist_index)02d:%(meta_track)s",
+                    "--parse-metadata",
+                    "%(uploader|)s:%(meta_artist)s",
+                ]
+            )
+
+        args.append(url_input.value)
+        return args
+
+    def quality_options(selected_format: str) -> list[ft.DropdownOption]:
+        options = {
+            "mp4": [
+                ("auto", "自動"),
+                ("4k", "4K"),
+                ("2k", "2K"),
+                ("1080p", "1080p"),
+                ("720p", "720p"),
+            ],
+            "mkv": [
+                ("auto", "自動"),
+                ("4k", "4K"),
+                ("2k", "2K"),
+                ("1080p", "1080p"),
+                ("720p", "720p"),
+            ],
+            "mp3": [
+                ("auto", "自動"),
+                ("320k", "320k"),
+                ("256k", "256k"),
+                ("192k", "192k"),
+                ("128k", "128k"),
+            ],
+            "aac": [
+                ("auto", "自動"),
+                ("320k", "320k"),
+                ("256k", "256k"),
+                ("192k", "192k"),
+                ("128k", "128k"),
+            ],
+            "flac": [("auto", "自動")],
+        }
+        return [
+            ft.DropdownOption(key=key, text=label)
+            for key, label in options[selected_format]
+        ]
+
+    def handle_format_select(e: ft.Event[ft.Dropdown]):
+        quality_dropdown.options = quality_options(e.control.value or "mp4")
+        quality_dropdown.value = "auto"
+        quality_dropdown.update()
+        album_mode.visible = (e.control.value or "mp4") in ("mp3", "aac", "flac")
+        if not album_mode.visible:
+            album_mode.value = False
+            playlist_mode.disabled = False
+            update_filename_template()
+        album_mode.update()
+        persist_settings()
+
+    def update_filename_template() -> None:
+        if album_mode.value:
+            filename_template.value = (
+                "%(album|playlist_title)s/%(playlist_index)02d - %(title)s.%(ext)s"
+            )
+        elif playlist_mode.value:
+            filename_template.value = (
+                "%(playlist_title)s/%(playlist_index)02d - %(title)s.%(ext)s"
+            )
+        else:
+            filename_template.value = "%(title)s.%(ext)s"
+        filename_template.update()
+
+    def handle_playlist_mode_change(e: ft.Event[ft.Checkbox]):
+        update_filename_template()
+        persist_settings()
+
+    def handle_album_mode_change(e: ft.Event[ft.Checkbox]):
+        playlist_mode.value = bool(e.control.value)
+        playlist_mode.disabled = bool(e.control.value)
+        playlist_mode.update()
+        update_filename_template()
+        persist_settings()
+
+    def append_log(line: str) -> None:
+        lines = (log_text.value or "").splitlines()
+        lines.append(line)
+        log_text.value = "\n".join(lines[-500:])
+        log_text.update()
 
     async def handle_download(e: ft.Event[ft.FloatingActionButton]):
         if not url_input.value or not output_path_field.value:
             page.show_dialog(ft.SnackBar(ft.Text("URLまたは保存先を指定してください")))
             return
         command = "yt-dlp"
-        args = [
-            "--newline",
-            "--color",
-            "no_color",
-            "-f",
-            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
-            "-o",
-            "%(title)s.%(ext)s",
-            "-P",
-            os.path.abspath(output_path_field.value),
-            "--progress-template",
-            "download:[DOWNLOADING]\t%(progress._percent)s\t%(info.title)s",
-            url_input.value,
-        ]
+        args = build_args()
+        persist_settings()
         page.floating_action_button.disabled = True
         page.floating_action_button.update()
         progress_bar.value = None
@@ -64,7 +297,7 @@ def main(page: ft.Page):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=env,
-                creationflags=creationflags
+                creationflags=creationflags,
             )
             assert process.stdout is not None
 
@@ -72,20 +305,18 @@ def main(page: ft.Page):
                 line = await process.stdout.readline()
                 if not line:
                     break
-                text = line.decode("utf-8",errors='replace').rstrip()
+                text = line.decode("utf-8", errors="replace").rstrip()
                 if text.startswith("[DOWNLOADING]"):
-                    _, percent, title = text.split('\t',maxsplit=2)
-                    print(round(float(percent) / 100))
+                    _, percent, title = text.split("\t", maxsplit=2)
                     progress_bar.value = float(percent) / 100
                     status_text.value = f"{title[:50]}をダウンロード中..."
                     page.update()
                     await asyncio.sleep(0)
-                    
+
                 else:
                     progress_bar.value = None
                     progress_bar.update()
-                    log_text.value += text + "\n"
-                    log_text.update()
+                    append_log(text)
 
             status_code = await process.wait()
 
@@ -108,13 +339,121 @@ def main(page: ft.Page):
         content=ft.Text("選択"), icon=ft.Icons.FOLDER, on_click=handle_output_pick
     )
     output_path_field = ft.TextField(read_only=True, expand=1)
-    log_text = ft.Text(size=14,selectable=True)
+    format_dropdown = ft.Dropdown(
+        label="フォーマット",
+        value="mp4",
+        options=[
+            ft.DropdownOption(key=name, text=name)
+            for name in ("mp4", "mkv", "mp3", "aac", "flac")
+        ],
+        on_select=handle_format_select,
+        expand=1,
+    )
+    quality_dropdown = ft.Dropdown(
+        label="品質",
+        value="auto",
+        options=quality_options("mp4"),
+        on_select=handle_settings_change,
+        expand=1,
+    )
+    filename_template = ft.TextField(
+        label="ファイル名テンプレート",
+        value="%(title)s.%(ext)s",
+        on_change=handle_settings_change,
+        expand=1,
+    )
+    playlist_mode = ft.Checkbox(
+        label="プレイリストモード", on_change=handle_playlist_mode_change
+    )
+    album_mode = ft.Checkbox(
+        label="アルバムモード", visible=False, on_change=handle_album_mode_change
+    )
+    embed_thumbnail = ft.Checkbox(
+        label="サムネイルを埋め込む", on_change=handle_settings_change
+    )
+    crop_thumbnail = ft.Checkbox(
+        label="サムネイルを中央で正方形にクロップ",
+        on_change=handle_settings_change,
+    )
+    log_text = ft.Text(size=14, selectable=True, font_family="monospace")
     log_area = ft.ListView(controls=[log_text], expand=1, auto_scroll=True)
+    tabs = ft.Tabs(
+        length=2,
+        expand=1,
+        content=ft.Column(
+            expand=1,
+            controls=[
+                ft.TabBar(
+                    tabs=[
+                        ft.Tab(label="ログ", icon=ft.Icons.SUBJECT),
+                        ft.Tab(label="設定", icon=ft.Icons.SETTINGS),
+                    ]
+                ),
+                ft.TabBarView(
+                    expand=1,
+                    controls=[
+                        ft.Container(
+                            content=log_area,
+                            border=ft.Border.all(1),
+                            padding=ft.Padding.all(10),
+                            border_radius=ft.BorderRadius.all(4),
+                            expand=1,
+                        ),
+                        ft.Container(
+                            content=ft.Column(
+                                controls=[
+                                    ft.Row(
+                                        controls=[
+                                            ft.Container(
+                                                content=format_dropdown,
+                                                expand=1,
+                                            ),
+                                            ft.Container(
+                                                content=quality_dropdown,
+                                                expand=1,
+                                            ),
+                                        ]
+                                    ),
+                                    ft.Row(controls=[filename_template]),
+                                    ft.Row(
+                                        controls=[
+                                            ft.Container(
+                                                content=playlist_mode,
+                                                expand=1,
+                                            ),
+                                            ft.Container(
+                                                content=embed_thumbnail,
+                                                expand=1,
+                                            ),
+                                        ]
+                                    ),
+                                    ft.Row(
+                                        controls=[
+                                            ft.Container(
+                                                content=album_mode,
+                                                expand=1,
+                                            ),
+                                            ft.Container(
+                                                content=crop_thumbnail,
+                                                expand=1,
+                                            ),
+                                        ]
+                                    ),
+                                ],
+                                tight=True,
+                            ),
+                            padding=ft.Padding.all(10),
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    )
     page.floating_action_button = ft.FloatingActionButton(
         icon=ft.Icons.PLAY_ARROW, on_click=handle_download
     )
-    status_text = ft.Text(value="準備完了",size=10)
-    progress_bar = ft.ProgressBar(value=0,border_radius=ft.BorderRadius.all(4))
+    status_text = ft.Text(value="準備完了", size=12)
+    progress_bar = ft.ProgressBar(value=0, border_radius=ft.BorderRadius.all(4))
 
     page.add(
         ft.SafeArea(
@@ -122,14 +461,16 @@ def main(page: ft.Page):
                 controls=[
                     ft.Row([url_input]),
                     ft.Row([output_path_field, output_path_btn]),
-                    ft.Column(controls=[status_text,progress_bar]),
-                    ft.Container(content=log_area, border=ft.Border.all(1),padding=ft.Padding.all(10),border_radius=ft.BorderRadius.all(4), expand=1),
+                    ft.Column(controls=[status_text, progress_bar]),
+                    tabs,
                 ],
                 expand=1,
             ),
             expand=1,
         )
     )
+
+    init()
 
 
 if __name__ == "__main__":
