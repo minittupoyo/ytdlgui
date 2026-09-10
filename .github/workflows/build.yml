@@ -1,0 +1,142 @@
+name: Build release assets
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FLET_CLI_NO_RICH_OUTPUT: 1
+  PYINSTALLER_VERSION: "6.22.2"
+  YT_DLP_VERSION: "2026.08.19"
+
+jobs:
+  prepare-build:
+    name: Prepare GitHub Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      tag: ${{ steps.version.outputs.tag }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Read project version
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.asset }}
+    needs: prepare-build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset: windows-x86_64
+            runner: windows-latest
+            bootloader_waf_args: ""
+            yt_dlp_asset: yt-dlp.exe
+            yt_dlp_filename: yt-dlp.exe
+            yt_dlp_sha256: 66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a
+          - asset: macos-arm64
+            runner: macos-latest
+            bootloader_waf_args: "--no-universal2"
+            yt_dlp_asset: yt-dlp_macos
+            yt_dlp_filename: yt-dlp
+            yt_dlp_sha256: 0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        shell: bash
+        run: uv sync --frozen --python 3.14
+
+      - name: Download yt-dlp
+        shell: bash
+        env:
+          YT_DLP_ASSET: ${{ matrix.yt_dlp_asset }}
+          YT_DLP_FILENAME: ${{ matrix.yt_dlp_filename }}
+          YT_DLP_SHA256: ${{ matrix.yt_dlp_sha256 }}
+        run: |
+          mkdir -p src/assets/bin
+          curl --fail --location --retry 3 \
+            "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/${YT_DLP_ASSET}" \
+            --output "src/assets/bin/${YT_DLP_FILENAME}"
+          python -c 'import hashlib, os, pathlib, sys; path = pathlib.Path("src/assets/bin") / os.environ["YT_DLP_FILENAME"]; actual = hashlib.sha256(path.read_bytes()).hexdigest(); expected = os.environ["YT_DLP_SHA256"].lower(); print(f"SHA-256: {actual}"); sys.exit(0 if actual == expected else "yt-dlp SHA-256 mismatch")'
+          chmod +x "src/assets/bin/${YT_DLP_FILENAME}"
+
+      - name: Rebuild PyInstaller bootloader
+        shell: bash
+        env:
+          PYINSTALLER_BOOTLOADER_WAF_ARGS: ${{ matrix.bootloader_waf_args }}
+          PYINSTALLER_COMPILE_BOOTLOADER: 1
+          UV_NO_CACHE: 1
+        run: |
+          uv pip install \
+            --reinstall \
+            --no-binary pyinstaller \
+            --no-deps \
+            "pyinstaller==${PYINSTALLER_VERSION}"
+
+      - name: Package ${{ matrix.asset }}
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.prepare-build.outputs.version }}
+        run: |
+          pack_args=(
+            src/main.py
+            --name ytdlgui
+            --distpath dist
+            --add-data src/assets:assets
+            --product-name ytdlgui
+            --product-version "$APP_VERSION"
+            --yes
+          )
+
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            pack_args+=(
+              --file-version "${APP_VERSION}.0"
+              --company-name Flet
+              --copyright "Copyright (C) 2023-2026 by Flet"
+            )
+          else
+            pack_args+=(--bundle-id com.mycompany.ytdlgui)
+          fi
+
+          uv run --no-sync flet pack "${pack_args[@]}"
+
+      - name: Name build archive
+        shell: bash
+        run: |
+          mkdir -p release
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a "release/ytdlgui-${{ needs.prepare-build.outputs.version }}-${{ matrix.asset }}.zip" dist/ytdlgui.exe
+          else
+            ditto -c -k --sequesterRsrc --keepParent dist/ytdlgui.app "release/ytdlgui-${{ needs.prepare-build.outputs.version }}-${{ matrix.asset }}.zip"
+          fi
+
+      - name: Upload build archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: ytdlgui-${{ matrix.asset }}
+          path: release/*.zip
+          if-no-files-found: error
