@@ -8,6 +8,7 @@ permissions:
 
 env:
   FLET_CLI_NO_RICH_OUTPUT: 1
+  YT_DLP_VERSION: "2026.08.19"
 
 jobs:
   prepare-release:
@@ -58,14 +59,34 @@ jobs:
             runner: windows-latest
             target: windows
             extra_args: ""
+            yt_dlp_asset: yt-dlp.exe
+            yt_dlp_filename: yt-dlp.exe
+            yt_dlp_sha256: 66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a
           - asset: macos-arm64
             runner: macos-latest
             target: macos
             extra_args: "--arch arm64"
+            yt_dlp_asset: yt-dlp_macos
+            yt_dlp_filename: yt-dlp
+            yt_dlp_sha256: 0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202
 
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+
+      - name: Download yt-dlp
+        shell: bash
+        env:
+          YT_DLP_ASSET: ${{ matrix.yt_dlp_asset }}
+          YT_DLP_FILENAME: ${{ matrix.yt_dlp_filename }}
+          YT_DLP_SHA256: ${{ matrix.yt_dlp_sha256 }}
+        run: |
+          mkdir -p src/assets/bin
+          curl --fail --location --retry 3 \
+            "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/${YT_DLP_ASSET}" \
+            --output "src/assets/bin/${YT_DLP_FILENAME}"
+          echo "${YT_DLP_SHA256}  src/assets/bin/${YT_DLP_FILENAME}" | sha256sum --check
+          chmod +x "src/assets/bin/${YT_DLP_FILENAME}"
 
       - name: Build ${{ matrix.asset }}
         id: build

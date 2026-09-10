@@ -30,9 +30,52 @@ def save_settings(settings: dict[str, object]) -> None:
         pass
 
 
+def yt_dlp_filename() -> str:
+    return "yt-dlp.exe" if platform.system() == "Windows" else "yt-dlp"
+
+
+def bundled_yt_dlp_path() -> Path:
+    return Path(__file__).resolve().parent / "assets" / "bin" / yt_dlp_filename()
+
+
+def managed_yt_dlp_path() -> Path:
+    return settings_path().parent / "bin" / yt_dlp_filename()
+
+
+def prepare_yt_dlp() -> str | None:
+    managed_path = managed_yt_dlp_path()
+    if managed_path.is_file():
+        return str(managed_path)
+
+    bundled_path = bundled_yt_dlp_path()
+    if bundled_path.is_file():
+        try:
+            managed_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(bundled_path, managed_path)
+            managed_path.chmod(managed_path.stat().st_mode | 0o111)
+            return str(managed_path)
+        except OSError:
+            return str(bundled_path)
+
+    return shutil.which("yt-dlp")
+
+
+def find_yt_dlp() -> str | None:
+    managed_path = managed_yt_dlp_path()
+    if managed_path.is_file():
+        return str(managed_path)
+
+    bundled_path = bundled_yt_dlp_path()
+    if bundled_path.is_file():
+        return str(bundled_path)
+    return shutil.which("yt-dlp")
+
+
 def check_dependencies() -> list[str]:
     missing: list[str] = []
 
+    if find_yt_dlp() is None:
+        missing.append("yt-dlp")
     for command in ("deno", "ffmpeg"):
         if shutil.which(command) is None:
             missing.append(command)
@@ -57,6 +100,49 @@ def fix_path_env() -> None:
 
 
 def main(page: ft.Page):
+
+    async def check_yt_dlp_update() -> None:
+        command = prepare_yt_dlp()
+        if command is None:
+            return
+
+        status_text.value = "yt-dlpの更新を確認しています..."
+        page.floating_action_button.disabled = True
+        page.update()
+        process: asyncio.subprocess.Process | None = None
+        try:
+            creationflags = 0
+            if platform.system() == "Windows":
+                creationflags = subprocess.CREATE_NO_WINDOW
+            process = await asyncio.create_subprocess_exec(
+                command,
+                "-U",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                creationflags=creationflags,
+            )
+            output, _ = await asyncio.wait_for(process.communicate(), timeout=60)
+            message = output.decode("utf-8", errors="replace").strip()
+            if message:
+                append_log(message)
+            if process.returncode != 0:
+                append_log(
+                    "yt-dlpの更新確認に失敗しました。"
+                    "現在のバージョンを使用します。"
+                )
+        except (OSError, asyncio.TimeoutError) as error:
+            append_log(f"yt-dlpの更新確認に失敗しました: {error}")
+            if (
+                isinstance(error, asyncio.TimeoutError)
+                and process is not None
+                and process.returncode is None
+            ):
+                process.kill()
+                await process.wait()
+        finally:
+            status_text.value = "準備完了"
+            page.floating_action_button.disabled = False
+            page.update()
 
     def init():
         settings = load_settings()
@@ -274,7 +360,10 @@ def main(page: ft.Page):
         if not url_input.value or not output_path_field.value:
             page.show_dialog(ft.SnackBar(ft.Text("URLまたは保存先を指定してください")))
             return
-        command = "yt-dlp"
+        command = find_yt_dlp()
+        if command is None:
+            page.show_dialog(ft.SnackBar(ft.Text("yt-dlpが見つかりませんでした")))
+            return
         args = build_args()
         persist_settings()
         page.floating_action_button.disabled = True
@@ -471,6 +560,7 @@ def main(page: ft.Page):
     )
 
     init()
+    page.run_task(check_yt_dlp_update)
 
 
 if __name__ == "__main__":

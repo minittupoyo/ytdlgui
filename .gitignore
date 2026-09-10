@@ -20,6 +20,8 @@ env/
 build/
 dist/
 storage/
+src/assets/bin/yt-dlp
+src/assets/bin/yt-dlp.exe
 
 # IDE
 .idea/
