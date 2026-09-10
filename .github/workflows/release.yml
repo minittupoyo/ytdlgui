@@ -1,8 +1,7 @@
 name: Build release assets
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,8 +10,44 @@ env:
   FLET_CLI_NO_RICH_OUTPUT: 1
 
 jobs:
+  prepare-release:
+    name: Prepare GitHub Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      tag: ${{ steps.version.outputs.tag }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Read project version
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists"
+            exit 1
+          fi
+
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --generate-notes
+
   build:
     name: Build ${{ matrix.asset }}
+    needs: prepare-release
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -31,13 +66,6 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v6
 
-      - name: Read project version
-        id: version
-        shell: bash
-        run: |
-          VERSION="$(python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
-          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Build ${{ matrix.asset }}
         id: build
         uses: flet-dev/flet-build-action@v1
@@ -46,14 +74,14 @@ jobs:
           runner-python-version: "3.14"
           bundled-python-version: "3.14"
           build-number: ${{ github.run_number }}
-          build-version: ${{ steps.version.outputs.value }}
+          build-version: ${{ needs.prepare-release.outputs.version }}
           extra-args: ${{ matrix.extra_args }}
 
       - name: Name build archive
         shell: bash
         run: |
           mkdir -p release
-          cp "${{ steps.build.outputs.archive-path }}" "release/ytdlgui-${{ steps.version.outputs.value }}-${{ matrix.asset }}.zip"
+          cp "${{ steps.build.outputs.archive-path }}" "release/ytdlgui-${{ needs.prepare-release.outputs.version }}-${{ matrix.asset }}.zip"
 
       - name: Upload build archive
         uses: actions/upload-artifact@v7
@@ -64,7 +92,9 @@ jobs:
 
   publish-assets:
     name: Attach assets to GitHub Release
-    needs: build
+    needs:
+      - prepare-release
+      - build
     runs-on: ubuntu-latest
 
     steps:
@@ -75,8 +105,21 @@ jobs:
           path: release
           merge-multiple: true
 
-      - name: Upload build archives to the existing release
+      - name: Show downloaded files
+        shell: bash
+        run: find release -maxdepth 2 -type f -print
+
+      - name: Upload build archives to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" release/*.zip --clobber
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+        shell: bash
+        run: |
+          mapfile -t files < <(find release -maxdepth 2 -type f -name '*.zip' -print)
+
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No release archives found"
+            exit 1
+          fi
+
+          gh release upload "$TAG" "${files[@]}" --clobber
