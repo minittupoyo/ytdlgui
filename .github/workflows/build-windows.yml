@@ -9,27 +9,60 @@ on:
 
 env:
   FLET_CLI_NO_RICH_OUTPUT: 1
+  PYINSTALLER_VERSION: "6.22.2"
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout
+      - name: Check out source
         uses: actions/checkout@v6
 
-      - name: Build EXE
-        id: build
-        uses: flet-dev/flet-build-action@v1
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
-          target: windows
-          runner-python-version: "3.14"
-          bundled-python-version: "3.14"
-          build-number: ${{ github.run_number }}
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        shell: bash
+        run: uv sync --frozen --python 3.14
+
+      - name: Rebuild PyInstaller bootloader
+        shell: bash
+        env:
+          PYINSTALLER_COMPILE_BOOTLOADER: 1
+          UV_NO_CACHE: 1
+        run: |
+          uv pip install \
+            --reinstall \
+            --no-binary pyinstaller \
+            --no-deps \
+            "pyinstaller==${PYINSTALLER_VERSION}"
+
+      - name: Package Windows app
+        shell: bash
+        run: |
+          VERSION="$(uv run --no-sync python -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')"
+          uv run --no-sync flet pack src/main.py \
+            --name ytdlgui \
+            --distpath dist \
+            --add-data src/assets:assets \
+            --product-name ytdlgui \
+            --product-version "$VERSION" \
+            --file-version "${VERSION}.0" \
+            --company-name Flet \
+            --copyright "Copyright (C) 2023-2026 by Flet" \
+            --yes
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          path: ${{ steps.build.outputs.archive-path }}
-          archive: false
+          name: ytdlgui-windows-x86_64
+          path: dist/ytdlgui.exe
           if-no-files-found: error

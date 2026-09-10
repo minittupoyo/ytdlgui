@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -7,6 +8,36 @@ SPEC = importlib.util.spec_from_file_location("ytdlgui_app", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 app = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(app)
+
+
+def test_settings_path_uses_windows_appdata(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(app.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
+    assert app.settings_path() == tmp_path / "ytdlgui" / "settings.json"
+
+
+def test_settings_path_uses_macos_application_support(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(app.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(app.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "ignored"))
+
+    assert app.settings_path() == (
+        tmp_path / "Library" / "Application Support" / "ytdlgui" / "settings.json"
+    )
+
+
+def test_load_settings_migrates_legacy_macos_file(monkeypatch, tmp_path: Path):
+    current = tmp_path / "Library" / "Application Support" / "ytdlgui" / "settings.json"
+    legacy = tmp_path / "AppData" / "Roaming" / "ytdlgui" / "settings.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"format": "mp3"}), encoding="utf-8")
+    monkeypatch.setattr(app.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(app, "settings_path", lambda: current)
+    monkeypatch.setattr(app, "legacy_settings_path", lambda: legacy)
+
+    assert app.load_settings() == {"format": "mp3"}
+    assert json.loads(current.read_text(encoding="utf-8")) == {"format": "mp3"}
 
 
 def test_find_yt_dlp_prefers_bundled_binary(monkeypatch, tmp_path: Path):

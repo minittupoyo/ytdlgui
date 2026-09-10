@@ -1,24 +1,53 @@
-import flet as ft
+import asyncio
 import json
 import os
-import subprocess
-import asyncio
 import platform
 import shutil
+import subprocess
 from pathlib import Path
+
+import flet as ft
+
+
+def config_dir() -> Path:
+    system = platform.system()
+    if system == "Windows":
+        base_dir = Path(
+            os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")
+        )
+    elif system == "Darwin":
+        base_dir = Path.home() / "Library" / "Application Support"
+    else:
+        base_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return base_dir / "ytdlgui"
 
 
 def settings_path() -> Path:
-    app_data = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-    return app_data / "ytdlgui" / "settings.json"
+    return config_dir() / "settings.json"
+
+
+def legacy_settings_path() -> Path:
+    return Path.home() / "AppData" / "Roaming" / "ytdlgui" / "settings.json"
 
 
 def load_settings() -> dict[str, object]:
-    try:
-        settings = json.loads(settings_path().read_text(encoding="utf-8"))
-        return settings if isinstance(settings, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    current_path = settings_path()
+    paths = [current_path]
+    legacy_path = legacy_settings_path()
+    if platform.system() != "Windows" and legacy_path != current_path:
+        paths.append(legacy_path)
+
+    for path in paths:
+        try:
+            settings = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(settings, dict):
+            continue
+        if path == legacy_path:
+            save_settings(settings)
+        return settings
+    return {}
 
 
 def save_settings(settings: dict[str, object]) -> None:
@@ -226,6 +255,9 @@ def main(page: ft.Page):
             "--progress-template",
             "download:[DOWNLOADING]\t%(progress._percent)s\t%(info.title)s",
         ]
+
+        if platform.system() == "Windows":
+            args.extend(["--encoding","utf-8"])
 
         if selected_format in ("mp4", "mkv"):
             height = {"4k": "2160", "2k": "1440", "1080p": "1080", "720p": "720"}
