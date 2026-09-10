@@ -48,16 +48,23 @@ def main(page: ft.Page):
         page.floating_action_button.update()
         progress_bar.value = None
         progress_bar.update()
+        status_text.value = "ダウンロードの準備をしています..."
+        status_text.update()
         try:
+            creationflags = 0
             env = os.environ.copy()
             env.pop("PYTHONHOME", None)
             env.pop("PYTHONPATH", None)
+            env["PYTHONIOENCODING"] = "utf-8"
+            if platform.system() == "Windows":
+                creationflags = subprocess.CREATE_NO_WINDOW
             process = await asyncio.create_subprocess_exec(
                 command,
                 *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env=env
+                env=env,
+                creationflags=creationflags
             )
             assert process.stdout is not None
 
@@ -65,11 +72,12 @@ def main(page: ft.Page):
                 line = await process.stdout.readline()
                 if not line:
                     break
-                text = line.decode(errors='replace').rstrip()
+                text = line.decode("utf-8",errors='replace').rstrip()
                 if text.startswith("[DOWNLOADING]"):
                     _, percent, title = text.split('\t',maxsplit=2)
                     print(round(float(percent) / 100))
                     progress_bar.value = float(percent) / 100
+                    status_text.value = f"{title[:50]}をダウンロード中..."
                     page.update()
                     await asyncio.sleep(0)
                     
@@ -83,9 +91,11 @@ def main(page: ft.Page):
 
             if status_code != 0:
                 page.show_dialog(ft.SnackBar(ft.Text("処理中にエラーが発生しました")))
+                status_text.value = "処理中にエラーが発生しました"
                 progress_bar.value = 0
             else:
                 page.show_dialog(ft.SnackBar(ft.Text("正常にダウンロードできました")))
+                status_text.value = "正常にダウンロードできました"
                 progress_bar.value = 1
         finally:
             page.floating_action_button.disabled = False
@@ -103,6 +113,7 @@ def main(page: ft.Page):
     page.floating_action_button = ft.FloatingActionButton(
         icon=ft.Icons.PLAY_ARROW, on_click=handle_download
     )
+    status_text = ft.Text(value="準備完了",size=10)
     progress_bar = ft.ProgressBar(value=0,border_radius=ft.BorderRadius.all(4))
 
     page.add(
@@ -111,7 +122,7 @@ def main(page: ft.Page):
                 controls=[
                     ft.Row([url_input]),
                     ft.Row([output_path_field, output_path_btn]),
-                    progress_bar,
+                    ft.Column(controls=[status_text,progress_bar]),
                     ft.Container(content=log_area, border=ft.Border.all(1),padding=ft.Padding.all(10),border_radius=ft.BorderRadius.all(4), expand=1),
                 ],
                 expand=1,
