@@ -88,14 +88,15 @@ jobs:
         shell: bash
         env:
           PYINSTALLER_BOOTLOADER_WAF_ARGS: ${{ matrix.bootloader_waf_args }}
-          PYINSTALLER_COMPILE_BOOTLOADER: 1
-          UV_NO_CACHE: 1
+          PYINSTALLER_SOURCE: .pyinstaller-src
         run: |
-          uv pip install \
-            --reinstall \
-            --no-binary pyinstaller \
-            --no-deps \
-            "pyinstaller==${PYINSTALLER_VERSION}"
+          git clone --depth 1 --branch "v${PYINSTALLER_VERSION}" \
+            https://github.com/pyinstaller/pyinstaller.git \
+            "$PYINSTALLER_SOURCE"
+          pushd "$PYINSTALLER_SOURCE/bootloader"
+          uv run --project ../.. --no-sync python ./waf all $PYINSTALLER_BOOTLOADER_WAF_ARGS
+          popd
+          uv run --no-sync python -c 'import os, pathlib, shutil; import PyInstaller; from PyInstaller import PLATFORM; source = pathlib.Path(os.environ["PYINSTALLER_SOURCE"]) / "PyInstaller" / "bootloader" / PLATFORM; target = pathlib.Path(PyInstaller.__file__).parent / "bootloader" / PLATFORM; files = list(source.glob("run*")); assert files, f"No rebuilt bootloaders found in {source}"; [shutil.copy2(path, target / path.name) for path in files]; print(f"Installed {len(files)} rebuilt bootloaders into {target}")'
 
       - name: Package ${{ matrix.asset }}
         shell: bash
