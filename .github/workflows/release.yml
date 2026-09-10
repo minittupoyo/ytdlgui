@@ -1,10 +1,11 @@
-name: Build desktop apps
+name: Build release assets
 
 on:
-  workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   FLET_CLI_NO_RICH_OUTPUT: 1
@@ -61,3 +62,22 @@ jobs:
           path: release/*.zip
           archive: false
           if-no-files-found: error
+
+  publish-assets:
+    name: Attach assets to GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download build archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ytdlgui-*
+          path: release
+          merge-multiple: true
+
+      - name: Upload build archives to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" release/*.zip --clobber
