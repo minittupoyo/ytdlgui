@@ -4,6 +4,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import flet as ft
@@ -71,6 +72,35 @@ def managed_yt_dlp_path() -> Path:
     return settings_path().parent / "bin" / yt_dlp_filename()
 
 
+def install_dir() -> Path:
+    """Return the directory containing the installed/portable executable."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def find_tool(command: str) -> str | None:
+    """Find a bundled Windows tool before falling back to the system PATH."""
+    filename = f"{command}.exe" if platform.system() == "Windows" else command
+    bundled_path = install_dir() / "tools" / filename
+    if bundled_path.is_file():
+        return str(bundled_path)
+    return shutil.which(command)
+
+
+def subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
+    env["PYTHONIOENCODING"] = "utf-8"
+    tools_dir = install_dir() / "tools"
+    if tools_dir.is_dir():
+        env["PATH"] = os.pathsep.join(
+            [str(tools_dir), env.get("PATH", "")]
+        ).rstrip(os.pathsep)
+    return env
+
+
 def prepare_yt_dlp() -> str | None:
     managed_path = managed_yt_dlp_path()
     if managed_path.is_file():
@@ -106,7 +136,7 @@ def check_dependencies() -> list[str]:
     if find_yt_dlp() is None:
         missing.append("yt-dlp")
     for command in ("deno", "ffmpeg"):
-        if shutil.which(command) is None:
+        if find_tool(command) is None:
             missing.append(command)
 
     return missing
@@ -406,10 +436,7 @@ def main(page: ft.Page):
         status_text.update()
         try:
             creationflags = 0
-            env = os.environ.copy()
-            env.pop("PYTHONHOME", None)
-            env.pop("PYTHONPATH", None)
-            env["PYTHONIOENCODING"] = "utf-8"
+            env = subprocess_env()
             if platform.system() == "Windows":
                 creationflags = subprocess.CREATE_NO_WINDOW
             process = await asyncio.create_subprocess_exec(

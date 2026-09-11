@@ -1,6 +1,6 @@
 [project]
 name = "ytdlgui"
-version = "0.1.1"
+version = "0.1.2"
 description = ""
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,10 +27,10 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.flet]
-org = "com.mycompany"
-product = "ytdlgui"
-company = "Flet"
-copyright = "Copyright (C) 2023-2026 by Flet"
+org = "net.minittu"
+product = "Ytdlgui"
+company = "minittupoyo"
+copyright = "Copyright (C) 2026 minittupoyo"
 
 [tool.flet.app]
 path = "src"

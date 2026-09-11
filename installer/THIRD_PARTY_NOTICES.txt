@@ -1,0 +1,16 @@
+Ytdlgui bundles the following command-line tools on Windows.
+
+FFmpeg
+Copyright (c) the FFmpeg developers
+Licensed under the GNU Lesser General Public License (LGPL), version 2.1 or later.
+Source code and license information: https://ffmpeg.org/
+Windows build source: https://github.com/BtbN/FFmpeg-Builds
+
+Deno
+Copyright 2018-2026 the Deno authors
+Licensed under the MIT License.
+Source code and license information: https://github.com/denoland/deno
+
+yt-dlp
+Released into the public domain under The Unlicense.
+Source code and license information: https://github.com/yt-dlp/yt-dlp

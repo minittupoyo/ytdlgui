@@ -73,3 +73,28 @@ def test_prepare_yt_dlp_copies_bundled_binary(monkeypatch, tmp_path: Path):
 
     assert app.prepare_yt_dlp() == str(managed)
     assert managed.read_bytes() == b"yt-dlp"
+
+
+def test_find_tool_prefers_installed_tools_directory(monkeypatch, tmp_path: Path):
+    tool = tmp_path / "tools" / "ffmpeg.exe"
+    tool.parent.mkdir()
+    tool.touch()
+    monkeypatch.setattr(app.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(app, "install_dir", lambda: tmp_path)
+    monkeypatch.setattr(app.shutil, "which", lambda command: "from-path")
+
+    assert app.find_tool("ffmpeg") == str(tool)
+
+
+def test_subprocess_env_prepends_installed_tools(monkeypatch, tmp_path: Path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    monkeypatch.setattr(app, "install_dir", lambda: tmp_path)
+    monkeypatch.setenv("PATH", "system-path")
+    monkeypatch.setenv("PYTHONHOME", "ignored")
+
+    env = app.subprocess_env()
+
+    assert env["PATH"] == f"{tools}{app.os.pathsep}system-path"
+    assert "PYTHONHOME" not in env
+    assert env["PYTHONIOENCODING"] == "utf-8"

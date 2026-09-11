@@ -58,6 +58,15 @@ For more details on building Linux package, refer to the [Linux Packaging Guide]
 flet build windows -v
 ```
 
+GitHub ActionsのWindowsビルドでは、`yt-dlp`、`ffmpeg`、`ffprobe`、
+`deno`を含むポータブルZIPとInno Setupインストーラーを生成します。
+インストーラーは管理者権限を必要とせず、既定では
+`%LOCALAPPDATA%\Programs\Ytdlgui`へインストールされます。
+
+署名証明書を使用していないため、Windows SmartScreenの警告が表示される
+場合があります。配布物はGitHub Releasesから取得し、同時に公開される
+`SHA256SUMS.txt`で整合性を確認してください。
+
 For more details on building Windows package, refer to the [Windows Packaging Guide](https://flet.dev/docs/publish/windows/).
 
 ### Web
